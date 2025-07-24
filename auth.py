@@ -160,3 +160,11 @@ def get_user_mfa_secret(username: str) -> str | None:
     row = cur.fetchone()
     conn.close()
     return row[0] if row and row[0] else None
+
+def get_user_id(username):
+    conn = sqlite3.connect('vault.db')
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM users WHERE username = ?", (username,))
+    record = cur.fetchone()
+    conn.close()
+    return record[0] if record else None

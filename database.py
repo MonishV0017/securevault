@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import datetime
 
 def setup_db():
     conn = sqlite3.connect('vault.db')
@@ -19,13 +20,17 @@ def setup_db():
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS files (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        filename TEXT NOT NULL,
-        path TEXT NOT NULL,
+        user_id INTEGER,
+        filename TEXT,
+        path TEXT,
         salt TEXT,
         size_kb REAL,
         date_added TEXT
-    )
+        )
     ''')
+
+
+   
 
     # Check if 'username' column exists in 'files' table
     cursor.execute("PRAGMA table_info(files)")
@@ -43,6 +48,7 @@ def setup_db():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+
 
     conn.commit()
     conn.close()

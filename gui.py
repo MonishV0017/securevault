@@ -7,6 +7,7 @@ import subprocess
 import threading
 import sqlite3
 from tkinter import filedialog, messagebox, simpledialog
+from datetime import datetime
 
 import customtkinter as ctk
 import bcrypt
@@ -58,13 +59,16 @@ def save_file_metadata(username, filename, path, salt, size_bytes):
 def get_user_files(username):
     conn = sqlite3.connect('vault.db')
     cur = conn.cursor()
-    cur.execute(
-        "SELECT id, filename, path, salt FROM files WHERE username = ?",
-        (username,)
-    )
-    rows = cur.fetchall()
-    conn.close()
-    return rows
+    user_id = auth.get_user_id(username)
+    if user_id:
+        cur.execute(
+            "SELECT id, filename, path, salt, size_kb, date_added FROM files WHERE user_id = ?",
+            (user_id,)
+        )
+        rows = cur.fetchall()
+        conn.close()
+        return rows
+    return []
 
 def log_event(username, action, details=""):
     conn = sqlite3.connect('vault.db')
@@ -97,8 +101,9 @@ class VaultApp(ctk.CTk):
         
         self.create_login_ui()
     def file_exists(self, filename):
-        """Checks if a file with the given name already exists for the current user."""
-        return any(f[1] == filename for f in get_user_files(self.current_user))
+        encrypted_filename = f"{filename}.enc"
+        return any(f[1] == encrypted_filename for f in get_user_files(self.current_user))
+
 
     def get_new_filename(self, filename):
         """Generates a new filename like 'file (1).txt' if 'file.txt' exists."""
@@ -298,50 +303,23 @@ class VaultApp(ctk.CTk):
 
         ctk.CTkLabel(mfa_window, text="Scan QR Code", font=("Arial", 20, "bold")).pack(pady=10)
         ctk.CTkLabel(mfa_window, text="Scan with your authenticator app\n(e.g., Google Authenticator) to continue.", wraplength=330).pack(pady=5)
-            
+
         uri = pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name="SecureDigitalVault")
-            
-            
         qr_img = qrcode.make(uri)
         qr_image_pil = qr_img.convert("RGB")
         qr_image_ctk = ctk.CTkImage(light_image=qr_image_pil, dark_image=qr_image_pil, size=(250, 250))
-            
-            # Display the image
         qr_label = ctk.CTkLabel(mfa_window, image=qr_image_ctk, text="")
-        qr_label.pack(pady=10)  
+        qr_label.pack(pady=10)
 
         def close_and_return_to_login():
             mfa_window.destroy()
             messagebox.showinfo("Success", "Account created! Please log in to continue.", parent=self)
             self.create_login_ui()
-        
+
         ctk.CTkButton(mfa_window, text="Done", command=close_and_return_to_login).pack(pady=10)
 
-       
+        log_event(username, "signup", "Account created & MFA configured")
 
-        user = self.new_username.get().strip()
-        pwd = self.new_password.get()
-        ok, msg = auth.validate_password(pwd)
-        if not ok:
-            return messagebox.showerror("Error", msg)
-
-        success, msg = auth.create_user(user, self.email.get().strip(), pwd)
-        if not success:
-            return messagebox.showerror("Error", msg)
-
-        # Setup TOTP MFA
-        secret = auth.generate_mfa_secret(user)
-        uri = pyotp.TOTP(secret).provisioning_uri(
-            name=user, issuer_name="SecureDigitalVault"
-        )
-        messagebox.showinfo(
-            "MFA Setup",
-            f"Scan this in your Authenticator app:\n\n{uri}"
-        )
-
-        log_event(user, "signup", "Account created & MFA configured")
-        messagebox.showinfo("Success","Sign-up complete")
-        self.create_login_ui()
 
     # ---- FORGOT PASSWORD ----
     def create_forgot_ui(self):
@@ -412,7 +390,7 @@ class VaultApp(ctk.CTk):
 
         for label, cmd in [
             ("Upload File", self.upload_file),
-            ("List Files", self.create_reorder_window),
+            ("List Files", self.create_list_view_window),
             ("Delete File", self.delete_file),
             ("Retrieve File", self.retrieve_file),
             ("Backup Vault", self.gui_backup),
@@ -462,10 +440,11 @@ class VaultApp(ctk.CTk):
         if not passphrase:
             return messagebox.showerror("Error", "Passphrase required")
 
-        self._run_upload_with_progress(file_path, filename, passphrase)
+        self._run_upload_with_progress(file_path, filename, passphrase, size)
 
 
-    def _run_upload_with_progress(self, file_path, filename, passphrase):
+
+    def _run_upload_with_progress(self, file_path, filename, passphrase,size):
         progress_dialog = ctk.CTkToplevel(self)
         progress_dialog.title("Uploading...")
         progress_dialog.geometry("300x100")
@@ -484,42 +463,49 @@ class VaultApp(ctk.CTk):
 
                 enc_path, salt = encryptor.encrypt_file(dest_path, passphrase)
                 os.remove(dest_path)
-                save_file_metadata(self.current_user, filename, enc_path, salt)
+                save_file_metadata(self.current_user, filename, enc_path, salt, size)
                 log_event(self.current_user, "upload", filename)
                 
                 self.after(0, lambda: progress_bar.set(1))
                 self.after(100, progress_dialog.destroy)
                 self.after(100, lambda: messagebox.showinfo("Success", "File uploaded successfully!", parent=self))
             except Exception as e:
+                error_message = str(e)
                 self.after(0, progress_dialog.destroy)
-                self.after(0, lambda: messagebox.showerror("Error", f"Upload failed: {e}", parent=self))
+                self.after(0, lambda: messagebox.showerror("Error", f"Upload failed: {error_message}", parent=self))
+
 
         # Run the encryption in a separate thread to keep the GUI responsive
         threading.Thread(target=worker_thread, daemon=True).start()
 
 
-
-
-    def create_reorder_window(self):
+    def create_list_view_window(self):
         files = get_user_files(self.current_user)
         if not files:
             return messagebox.showinfo("Files", "You have no files uploaded.", parent=self)
 
-        reorder_window = ctk.CTkToplevel(self)
-        reorder_window.title("Manage Files")
-        reorder_window.geometry("500x400")
-        reorder_window.transient(self)
-        reorder_window.grab_set()
+        list_window = ctk.CTkToplevel(self)
+        list_window.title("My Files")
+        list_window.geometry("700x500")
+        list_window.transient(self); list_window.grab_set()
 
-        ctk.CTkLabel(reorder_window, text="Click and drag to reorder files.").pack(pady=10)
+        # --- Column Headers ---
+        header_frame = ctk.CTkFrame(list_window, fg_color="#333333", height=30)
+        header_frame.pack(fill="x", padx=10, pady=(10, 0))
+        header_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
-        scrollable_frame = ctk.CTkScrollableFrame(reorder_window)
-        scrollable_frame.pack(expand=True, fill="both", padx=10, pady=5)
+        ctk.CTkLabel(header_frame, text="Filename", font=("Arial", 12, "bold")).grid(row=0, column=0, sticky="w", padx=10)
+        ctk.CTkLabel(header_frame, text="Type", font=("Arial", 12, "bold")).grid(row=0, column=1, sticky="w", padx=5)
+        ctk.CTkLabel(header_frame, text="Size", font=("Arial", 12, "bold")).grid(row=0, column=2, sticky="w", padx=5)
+        ctk.CTkLabel(header_frame, text="Date Added", font=("Arial", 12, "bold")).grid(row=0, column=3, sticky="w", padx=5)
+
+        # --- Scrollable List of Files ---
+        scrollable_frame = ctk.CTkScrollableFrame(list_window)
+        scrollable_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
 
         self.file_widgets = []
         self.dragged_widget = None
 
-        # --- Helper functions for Drag & Drop ---
         def on_press(event, widget):
             self.dragged_widget = widget
             widget.start_y = event.y
@@ -532,31 +518,39 @@ class VaultApp(ctk.CTk):
         def on_release(event):
             if self.dragged_widget:
                 self.dragged_widget.place_forget()
-                
-                # Sort widgets based on their final y-position
                 self.file_widgets.sort(key=lambda w: w.winfo_y())
-
-                # Re-pack the widgets in the new order
                 for w in self.file_widgets:
                     w.pack_forget()
-                    w.pack(fill="x", pady=2, padx=5)
-
+                    w.pack(fill="x", pady=2)
             self.dragged_widget = None
         
-        # --- Create and bind a label for each file ---
+        # --- Create a row for each file ---
         for file_record in files:
-            filename = file_record[1]
+            _id, filename, _, _, size_kb, date_added = file_record
+            file_type = filename.split('.')[-1].upper()
+            size_str = f"{size_kb:.2f} KB" if size_kb else "N/A"
             
-            label = ctk.CTkLabel(scrollable_frame, text=filename, fg_color="#333333", corner_radius=6, height=30)
-            label.pack(fill="x", pady=2, padx=5)
-            self.file_widgets.append(label)
+            # Create a frame for the row
+            row_frame = ctk.CTkFrame(scrollable_frame, fg_color="#444444", corner_radius=6)
+            row_frame.pack(fill="x", pady=2)
+            row_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
-            # Bind mouse events for dragging
-            label.bind("<ButtonPress-1>", lambda event, w=label: on_press(event, w))
-            label.bind("<B1-Motion>", lambda event, w=label: on_motion(event, w))
-            label.bind("<ButtonRelease-1>", on_release)
+            # Add columns
+            ctk.CTkLabel(row_frame, text=filename, anchor="w").grid(row=0, column=0, sticky="w", padx=10)
+            ctk.CTkLabel(row_frame, text=file_type, anchor="w").grid(row=0, column=1, sticky="w", padx=5)
+            ctk.CTkLabel(row_frame, text=size_str, anchor="w").grid(row=0, column=2, sticky="w", padx=5)
+            ctk.CTkLabel(row_frame, text=date_added, anchor="w").grid(row=0, column=3, sticky="w", padx=5)
+
+            self.file_widgets.append(row_frame)
+
+            # Bind mouse events to the entire row frame for dragging
+            row_frame.bind("<ButtonPress-1>", lambda event, w=row_frame: on_press(event, w))
+            row_frame.bind("<B1-Motion>", lambda event, w=row_frame: on_motion(event, w))
+            row_frame.bind("<ButtonRelease-1>", on_release)
         
-        ctk.CTkButton(reorder_window, text="Close", command=reorder_window.destroy).pack(pady=10)
+        ctk.CTkButton(list_window, text="Close", command=list_window.destroy).pack(pady=10)
+
+    
 
 
     def delete_file(self):

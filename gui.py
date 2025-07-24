@@ -119,7 +119,7 @@ class VaultApp(ctk.CTk):
         """Finds a file by name, deletes its physical file, and its database record."""
         conn = sqlite3.connect('vault.db')
         cur = conn.cursor()
-        cur.execute("SELECT id, path FROM files WHERE username = ? AND filename = ?", (self.current_user, filename))
+        cur.execute("SELECT id, path FROM files WHERE username = ? AND filename + '.enc' = ?", (self.current_user, filename))
         record = cur.fetchone()
         if record:
             file_id, file_path = record
@@ -422,14 +422,14 @@ class VaultApp(ctk.CTk):
         if self.file_exists(filename):
             choice = messagebox.askyesnocancel(
                 "Duplicate File",
-                f"'{filename}' already exists.\n\n"
+                f"'{filename}.enc'   already exists.\n\n"
                 "YES to Overwrite it.\n"
                 "NO to Save a Copy.\n"
                 "CANCEL to abort."
             )
 
             if choice is True:  # Overwrite
-                self.delete_file_and_record(filename)
+                self.delete_file_and_record(f"{filename}.enc")
                 log_event(self.current_user, "overwrite", f"Overwrote file: {filename}")
             elif choice is False:  # Save as Copy
                 filename = self.get_new_filename(filename)

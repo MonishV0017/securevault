@@ -17,12 +17,14 @@ def setup_db():
 
     # Files table creation (without duplicate creation if exists)
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS files (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filename TEXT NOT NULL,
-            path TEXT NOT NULL,
-            salt TEXT
-        )
+    CREATE TABLE IF NOT EXISTS files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        filename TEXT NOT NULL,
+        path TEXT NOT NULL,
+        salt TEXT,
+        size_kb REAL,
+        date_added TEXT
+    )
     ''')
 
     # Check if 'username' column exists in 'files' table

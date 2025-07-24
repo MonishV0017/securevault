@@ -43,14 +43,16 @@ def is_valid_email(email: str) -> bool:
     return domain in ALLOWED_DOMAINS
 
 # --- DB HELPERS ---
-def save_file_metadata(username, filename, path, salt):
+def save_file_metadata(username, filename, path, salt, size_bytes):
     conn = sqlite3.connect('vault.db')
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO files (username, filename, path, salt) VALUES (?, ?, ?, ?)",
-        (username, filename, path, salt)
-    )
-    conn.commit()
+    user_id = auth.get_user_id(username)    
+    if user_id:
+        cur.execute(
+            "INSERT INTO files (user_id, filename, path, salt, size_kb, date_added) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, filename, path, salt, size_bytes / 1024.0, datetime.now().strftime("%Y-%m-%d %H:%M"))
+        )
+        conn.commit()
     conn.close()
 
 def get_user_files(username):
@@ -556,7 +558,7 @@ class VaultApp(ctk.CTk):
         
         ctk.CTkButton(reorder_window, text="Close", command=reorder_window.destroy).pack(pady=10)
 
-        
+
     def delete_file(self):
         files = get_user_files(self.current_user)
         if not files:

@@ -90,7 +90,7 @@ def upload_file():
     if 'file' not in request.files:
         return jsonify({'status': 'error', 'message': 'No file provided'}), 400
     file = request.files['file']
-    if file:
+    if file:    
         filename = file.filename
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)

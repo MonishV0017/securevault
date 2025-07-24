@@ -10,7 +10,8 @@ def setup_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             email TEXT UNIQUE NOT NULL,
-            password BLOB NOT NULL
+            password BLOB NOT NULL,
+            mfa_secret TEXT
         )
     ''')
 

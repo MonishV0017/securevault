@@ -1,5 +1,8 @@
-cryptography
-customtkinter
-pillow
-bcrypt
-python-dotenv
+customtkinter==5.2.2
+bcrypt==4.0.1
+Flask==3.0.3
+Flask-Cors==4.0.1
+Pillow==10.4.0
+pyotp==2.9.0
+python-dotenv==1.0.1
+qrcode==7.4.2

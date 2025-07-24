@@ -12,6 +12,10 @@ import customtkinter as ctk
 import bcrypt
 import pyotp  # For TOTP MFA
 
+import qrcode
+from PIL import Image
+
+
 import database
 import auth
 import otp_handler
@@ -92,15 +96,7 @@ class VaultApp(ctk.CTk):
         self.create_login_ui()
     def file_exists(self, filename):
         """Checks if a file with the given name already exists for the current user."""
-        conn = sqlite3.connect('vault.db')
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT id FROM files WHERE username = ? AND filename = ?",
-            (self.current_user, filename)
-        )
-        exists = cur.fetchone() is not None
-        conn.close()
-        return exists
+        return any(f[1] == filename for f in get_user_files(self.current_user))
 
     def get_new_filename(self, filename):
         """Generates a new filename like 'file (1).txt' if 'file.txt' exists."""
@@ -111,6 +107,20 @@ class VaultApp(ctk.CTk):
             counter += 1
             new_filename = f"{name} ({counter}){ext}"
         return new_filename
+
+    def delete_file_and_record(self, filename):
+        """Finds a file by name, deletes its physical file, and its database record."""
+        conn = sqlite3.connect('vault.db')
+        cur = conn.cursor()
+        cur.execute("SELECT id, path FROM files WHERE username = ? AND filename = ?", (self.current_user, filename))
+        record = cur.fetchone()
+        if record:
+            file_id, file_path = record
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            cur.execute("DELETE FROM files WHERE id = ?", (file_id,))
+            conn.commit()
+        conn.close()
 
 
     # ---- LOGIN ----
@@ -251,9 +261,61 @@ class VaultApp(ctk.CTk):
         if otp != self.generated_otp:
             self.signup_otp_attempts += 1
             if self.signup_otp_attempts > 2:
-                messagebox.showerror("Error","Too many invalid OTPs—exiting")
+                messagebox.showerror("Error", "Too many invalid OTPs—exiting")
                 sys.exit(1)
-            return messagebox.showerror("Error","Invalid OTP")
+            return messagebox.showerror("Error", "Invalid OTP")
+
+        user = self.new_username.get().strip()
+        pwd = self.new_password.get()
+        email = self.email.get().strip()
+
+        ok, msg = auth.validate_password(pwd)
+        if not ok:
+            return messagebox.showerror("Error", msg)
+
+        success, msg = auth.create_user(user, email, pwd)
+        if not success:
+            return messagebox.showerror("Error", msg)
+
+        # --- NEW: Clear the screen BEFORE showing the QR code ---
+        self.clear_window()
+        ctk.CTkLabel(self, text="Registration Successful!", font=("Arial", 24, "bold")).pack(pady=20)
+        ctk.CTkLabel(self, text="Final Step: Please set up your authenticator app.", font=("Arial", 14)).pack(pady=10)
+        # --- End of new code ---
+
+        # Now, show the QR code window on the new, clean screen
+        secret = auth.generate_mfa_secret(user)
+        self._show_mfa_qr_window(user, secret)
+
+    def _show_mfa_qr_window(self, username, secret):
+        mfa_window = ctk.CTkToplevel(self)
+        mfa_window.title("MFA Setup Required")
+        mfa_window.geometry("350x450")            
+        mfa_window.transient(self)
+        mfa_window.grab_set()
+
+        ctk.CTkLabel(mfa_window, text="Scan QR Code", font=("Arial", 20, "bold")).pack(pady=10)
+        ctk.CTkLabel(mfa_window, text="Scan with your authenticator app\n(e.g., Google Authenticator) to continue.", wraplength=330).pack(pady=5)
+            
+        uri = pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name="SecureDigitalVault")
+            
+            
+        qr_img = qrcode.make(uri)
+        qr_image_pil = qr_img.convert("RGB")
+        qr_image_ctk = ctk.CTkImage(light_image=qr_image_pil, dark_image=qr_image_pil, size=(250, 250))
+            
+            # Display the image
+        qr_label = ctk.CTkLabel(mfa_window, image=qr_image_ctk, text="")
+        qr_label.pack(pady=10)  
+
+        def close_and_return_to_login():
+            mfa_window.destroy()
+            messagebox.showinfo("Success", "Account created! Please log in to continue.", parent=self)
+            self.create_login_ui()
+        
+        ctk.CTkButton(mfa_window, text="Done", command=close_and_return_to_login).pack(pady=10)
+
+       
 
         user = self.new_username.get().strip()
         pwd = self.new_password.get()
@@ -340,7 +402,7 @@ class VaultApp(ctk.CTk):
 
     # ---- VAULT UI ----
     def create_vault_ui(self):
-        self.clear_window()
+        self.clear_window() 
         ctk.CTkLabel(self, text=f"Welcome, {self.current_user}!",
                      font=("Arial",20,"bold"),
                      text_color="#ffffff")\
@@ -348,7 +410,7 @@ class VaultApp(ctk.CTk):
 
         for label, cmd in [
             ("Upload File", self.upload_file),
-            ("List Files", self.list_files),
+            ("List Files", self.create_reorder_window),
             ("Delete File", self.delete_file),
             ("Retrieve File", self.retrieve_file),
             ("Backup Vault", self.gui_backup),
@@ -365,9 +427,10 @@ class VaultApp(ctk.CTk):
             return
 
         filename = os.path.basename(file_path)
-        # ensure exactly one “.” in the name
-        if filename.count('.') != 1:
-            return messagebox.showerror("Error", "Invalid filename/extension")
+        # --- MODIFIED: A better check to ensure a file has an extension ---
+        if '.' not in filename or filename.startswith('.'):
+            return messagebox.showerror("Error", "Invalid filename. File must have an extension.")
+        # --- End of modification ---
 
         size = os.path.getsize(file_path)
         if size < MIN_FILE_SIZE or size > MAX_FILE_SIZE:
@@ -376,7 +439,6 @@ class VaultApp(ctk.CTk):
                 f"File must be between 1 KB and 5 MB"
             )
 
-        # --- NEW: Check for duplicate file ---
         if self.file_exists(filename):
             choice = messagebox.askyesnocancel(
                 "Duplicate File",
@@ -387,38 +449,114 @@ class VaultApp(ctk.CTk):
             )
 
             if choice is True:  # Overwrite
-                # A more robust implementation would delete the old file first.
-                # For now, we'll just proceed and let the new record be used.
-                pass
+                self.delete_file_and_record(filename)
+                log_event(self.current_user, "overwrite", f"Overwrote file: {filename}")
             elif choice is False:  # Save as Copy
                 filename = self.get_new_filename(filename)
             else:  # Cancel
                 return
-        # --- End of new code ---
 
-        dest = os.path.join(UPLOAD_FOLDER, filename)
-        shutil.copy(file_path, dest)
-
-        passphrase = simpledialog.askstring(
-            "Encrypt Passphrase", "Enter passphrase:", show="*"
-        )
+        passphrase = simpledialog.askstring("Encrypt Passphrase", "Enter passphrase:", show="*", parent=self)
         if not passphrase:
-            os.remove(dest) # Clean up the copied file if user cancels
             return messagebox.showerror("Error", "Passphrase required")
 
-        enc_path, salt = encryptor.encrypt_file(dest, passphrase)
-        os.remove(dest)
-        save_file_metadata(self.current_user, filename, enc_path, salt)
-        log_event(self.current_user, "upload", filename)
-        messagebox.showinfo("Success", "File encrypted & saved")
+        self._run_upload_with_progress(file_path, filename, passphrase)
 
-    def list_files(self):
+
+    def _run_upload_with_progress(self, file_path, filename, passphrase):
+        progress_dialog = ctk.CTkToplevel(self)
+        progress_dialog.title("Uploading...")
+        progress_dialog.geometry("300x100")
+        progress_dialog.transient(self)
+        progress_dialog.grab_set()
+        ctk.CTkLabel(progress_dialog, text=f"Encrypting {os.path.basename(filename)}...").pack(pady=10)
+        progress_bar = ctk.CTkProgressBar(progress_dialog, width=280)
+        progress_bar.pack(pady=10)
+        progress_bar.set(0)
+
+        def worker_thread():
+            try:
+                dest_path = os.path.join(UPLOAD_FOLDER, filename)
+                shutil.copy(file_path, dest_path)
+                self.after(0, lambda: progress_bar.set(0.5)) # Visually update progress
+
+                enc_path, salt = encryptor.encrypt_file(dest_path, passphrase)
+                os.remove(dest_path)
+                save_file_metadata(self.current_user, filename, enc_path, salt)
+                log_event(self.current_user, "upload", filename)
+                
+                self.after(0, lambda: progress_bar.set(1))
+                self.after(100, progress_dialog.destroy)
+                self.after(100, lambda: messagebox.showinfo("Success", "File uploaded successfully!", parent=self))
+            except Exception as e:
+                self.after(0, progress_dialog.destroy)
+                self.after(0, lambda: messagebox.showerror("Error", f"Upload failed: {e}", parent=self))
+
+        # Run the encryption in a separate thread to keep the GUI responsive
+        threading.Thread(target=worker_thread, daemon=True).start()
+
+
+
+
+    def create_reorder_window(self):
         files = get_user_files(self.current_user)
         if not files:
-            return messagebox.showinfo("Uploaded Files","No files")
-        msg = "\n".join(f"{i+1}: {f[1]}" for i,f in enumerate(files))
-        messagebox.showinfo("Uploaded Files", msg)
+            return messagebox.showinfo("Files", "You have no files uploaded.", parent=self)
 
+        reorder_window = ctk.CTkToplevel(self)
+        reorder_window.title("Manage Files")
+        reorder_window.geometry("500x400")
+        reorder_window.transient(self)
+        reorder_window.grab_set()
+
+        ctk.CTkLabel(reorder_window, text="Click and drag to reorder files.").pack(pady=10)
+
+        scrollable_frame = ctk.CTkScrollableFrame(reorder_window)
+        scrollable_frame.pack(expand=True, fill="both", padx=10, pady=5)
+
+        self.file_widgets = []
+        self.dragged_widget = None
+
+        # --- Helper functions for Drag & Drop ---
+        def on_press(event, widget):
+            self.dragged_widget = widget
+            widget.start_y = event.y
+
+        def on_motion(event, widget):
+            if self.dragged_widget:
+                y = widget.winfo_y() - widget.start_y + event.y
+                widget.place(y=y)
+
+        def on_release(event):
+            if self.dragged_widget:
+                self.dragged_widget.place_forget()
+                
+                # Sort widgets based on their final y-position
+                self.file_widgets.sort(key=lambda w: w.winfo_y())
+
+                # Re-pack the widgets in the new order
+                for w in self.file_widgets:
+                    w.pack_forget()
+                    w.pack(fill="x", pady=2, padx=5)
+
+            self.dragged_widget = None
+        
+        # --- Create and bind a label for each file ---
+        for file_record in files:
+            filename = file_record[1]
+            
+            label = ctk.CTkLabel(scrollable_frame, text=filename, fg_color="#333333", corner_radius=6, height=30)
+            label.pack(fill="x", pady=2, padx=5)
+            self.file_widgets.append(label)
+
+            # Bind mouse events for dragging
+            label.bind("<ButtonPress-1>", lambda event, w=label: on_press(event, w))
+            label.bind("<B1-Motion>", lambda event, w=label: on_motion(event, w))
+            label.bind("<ButtonRelease-1>", on_release)
+        
+        ctk.CTkButton(reorder_window, text="Close", command=reorder_window.destroy).pack(pady=10)
+
+        
     def delete_file(self):
         files = get_user_files(self.current_user)
         if not files:

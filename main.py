@@ -1,13 +1,10 @@
+from database import setup_db
 from gui import VaultApp
-import database
-import os
-from encryptor import generate_key
 
-# Check if encryption key exists; if not, generate one.
-if not os.path.exists("key.key"):
-    generate_key()
+# 1. Run database setup immediately to create tables first
+setup_db()
 
+# 2. Start the application
 if __name__ == "__main__":
-    database.setup_db()
     app = VaultApp()
     app.mainloop()

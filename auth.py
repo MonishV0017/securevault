@@ -9,20 +9,27 @@ def _ensure_users_schema():
     conn = sqlite3.connect('vault.db')
     cur = conn.cursor()
 
-    # Ensure phone column exists
-    cur.execute("PRAGMA table_info(users)")
-    cols = [c[1] for c in cur.fetchall()]
-    if 'phone' not in cols:
-        cur.execute("ALTER TABLE users ADD COLUMN phone TEXT")
+    # ✅ check if users table exists before ALTER
+    try:
+        cur.execute("SELECT 1 FROM users LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.close()
+        return  # users table doesn't exist yet
 
-    # Ensure mfa_secret column exists
-    cur.execute("PRAGMA table_info(users)")
-    cols = [c[1] for c in cur.fetchall()]
-    if 'mfa_secret' not in cols:
+    # ✅ safe ALTERs
+    try:
+        cur.execute("ALTER TABLE users ADD COLUMN phone TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
         cur.execute("ALTER TABLE users ADD COLUMN mfa_secret TEXT")
+    except sqlite3.OperationalError:
+        pass
 
     conn.commit()
     conn.close()
+
 
 # Run migrations once on import
 _ensure_users_schema()

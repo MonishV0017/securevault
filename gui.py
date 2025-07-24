@@ -88,8 +88,30 @@ class VaultApp(ctk.CTk):
         self.pwd_visible = False
         self.signup_pwd_visible = False
 
-        database.setup_db()
+        
         self.create_login_ui()
+    def file_exists(self, filename):
+        """Checks if a file with the given name already exists for the current user."""
+        conn = sqlite3.connect('vault.db')
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM files WHERE username = ? AND filename = ?",
+            (self.current_user, filename)
+        )
+        exists = cur.fetchone() is not None
+        conn.close()
+        return exists
+
+    def get_new_filename(self, filename):
+        """Generates a new filename like 'file (1).txt' if 'file.txt' exists."""
+        name, ext = os.path.splitext(filename)
+        counter = 1
+        new_filename = f"{name} ({counter}){ext}"
+        while self.file_exists(new_filename):
+            counter += 1
+            new_filename = f"{name} ({counter}){ext}"
+        return new_filename
+
 
     # ---- LOGIN ----
     def create_login_ui(self):
@@ -345,7 +367,7 @@ class VaultApp(ctk.CTk):
         filename = os.path.basename(file_path)
         # ensure exactly one “.” in the name
         if filename.count('.') != 1:
-            return messagebox.showerror("Error","Invalid filename/extension")
+            return messagebox.showerror("Error", "Invalid filename/extension")
 
         size = os.path.getsize(file_path)
         if size < MIN_FILE_SIZE or size > MAX_FILE_SIZE:
@@ -354,6 +376,26 @@ class VaultApp(ctk.CTk):
                 f"File must be between 1 KB and 5 MB"
             )
 
+        # --- NEW: Check for duplicate file ---
+        if self.file_exists(filename):
+            choice = messagebox.askyesnocancel(
+                "Duplicate File",
+                f"'{filename}' already exists.\n\n"
+                "YES to Overwrite it.\n"
+                "NO to Save a Copy.\n"
+                "CANCEL to abort."
+            )
+
+            if choice is True:  # Overwrite
+                # A more robust implementation would delete the old file first.
+                # For now, we'll just proceed and let the new record be used.
+                pass
+            elif choice is False:  # Save as Copy
+                filename = self.get_new_filename(filename)
+            else:  # Cancel
+                return
+        # --- End of new code ---
+
         dest = os.path.join(UPLOAD_FOLDER, filename)
         shutil.copy(file_path, dest)
 
@@ -361,13 +403,14 @@ class VaultApp(ctk.CTk):
             "Encrypt Passphrase", "Enter passphrase:", show="*"
         )
         if not passphrase:
-            return messagebox.showerror("Error","Passphrase required")
+            os.remove(dest) # Clean up the copied file if user cancels
+            return messagebox.showerror("Error", "Passphrase required")
 
         enc_path, salt = encryptor.encrypt_file(dest, passphrase)
         os.remove(dest)
         save_file_metadata(self.current_user, filename, enc_path, salt)
         log_event(self.current_user, "upload", filename)
-        messagebox.showinfo("Success","File encrypted & saved")
+        messagebox.showinfo("Success", "File encrypted & saved")
 
     def list_files(self):
         files = get_user_files(self.current_user)

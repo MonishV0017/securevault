@@ -1,3 +1,4 @@
+
 # Secure-Digital-Vault# 🔐 Secure Digital Vault
 
 Secure Digital Vault is a privacy-focused application that enables users to securely store, backup, and manage their files. It incorporates multi-factor authentication (MFA), strong cryptographic encryption using **scrypt** and **AES-256**, and secure file handling functionalities including upload, download, backup, restore, and delete.
